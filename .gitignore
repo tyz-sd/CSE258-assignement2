@@ -1,3 +1,7 @@
 .DS_Store
 __pycache__/
 *_default/
+data/
+ml-1m_default/
+steam_default/
+model/
