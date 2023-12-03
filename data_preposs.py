@@ -16,6 +16,11 @@ tokenizer = BertTokenizer.from_pretrained(model_path)
 model = BertForSequenceClassification.from_pretrained(model_path)
 
 
+if torch.cuda.is_available():
+    print("CUDA is available. GPU will be used for inference.")
+else:
+    print("CUDA is not available. Inference will run on CPU.")
+
 file_path = './data/steam_reviews.json.gz'
 
 user_dict = set()
@@ -58,6 +63,8 @@ def convertDate(text):
 #         itemPerUser[user_id] = sorted(itemPerUser[user_id], key=lambda x: x[1])
 
 
+model = model.cuda()
+
 # Open the gzip file for reading
 with gzip.open(file_path, 'rt', encoding="utf-8") as file:
     # Parse the JSON data
@@ -75,25 +82,37 @@ with gzip.open(file_path, 'rt', encoding="utf-8") as file:
         date_obj = datetime.strptime(data['date'], '%Y-%m-%d')
         time = int(date_obj.strftime('%Y%m%d'))
         text = data['text']
-        with torch.no_grad():
-            inputs = tokenizer(text, padding=True, truncation=True, max_length=512, return_tensors="pt")
-            outputs = model(**inputs)
-            predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-            sentiment = 1 if predictions[0, 1] > predictions[0, 0] else 0
             
         item_dict.add(item_id)
-        itemPerUser[user_id].append((item_id, time, sentiment))
+        itemPerUser[user_id].append((item_id, time, text))
 
 
 user_map = {user: index for index, user in enumerate(user_dict)}
 item_map = {item: index for index, item in enumerate(item_dict)}
 
+cnt = 0
 processed_data = []
 for u in itemPerUser:
-    itemPerUser[u] = sorted(itemPerUser[u], key=lambda x: x[1])
     if len(itemPerUser[u]) >= 6:
+        itemPerUser[u] = sorted(itemPerUser[u], key=lambda x: x[1])
+        words = [item[2] for item in itemPerUser[u]]
+        inputs = tokenizer(words, padding=True, truncation=True, max_length=512, return_tensors="pt").to('cuda')
+        with torch.no_grad():
+            outputs = model(**inputs)
+            predictions = torch.nn.functional.softmax(outputs.logits, dim=-1).cpu()
+            sentiment = [1 if i[1] > i[0] else 0 for i in predictions]
+        if torch.cuda.is_available():
+            inputs = {k: v.cuda() for k, v in inputs.items()}
         for item in itemPerUser[u]:
-            processed_data.append((user_map[u], item_map[item[0]], item[2]))
+            cnt += 1
+            processed_data.append((user_map[u], item_map[item[0]], sentiment[itemPerUser[u].index(item)]))
+            if cnt % 10000 == 0:
+                print(cnt)
+    else:
+        cnt += len(itemPerUser[u])
+        if cnt % 10000 == 0:
+            print(cnt)
+    
 
 
 file_path = './data/data.txt'
